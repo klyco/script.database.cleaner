@@ -343,7 +343,6 @@ if debugging == 'true':
 else:
     debugging = False
 running_dialog = None
-global_logfile = None
 global_source_list = []
 global_prepared_list = None
 
@@ -450,186 +449,179 @@ def cleaner_log_file(our_select, my_command_list, cleaning):
                        )
                 xbmcvfs.delete(old_cleaner_log)
                 xbmcvfs.copy(cleaner_log, old_cleaner_log)
-        old_log = xbmcvfs.File(cleaner_log)
-        old_log_contents = old_log.read()
-        old_log.close()
+        with xbmcvfs.File(cleaner_log) as old_log:
+            old_log_contents = old_log.read()
 
     now = datetime.datetime.now()
-    logfile = xbmcvfs.File(cleaner_log, 'w')
-    if old_log_contents:
-        logfile.write(old_log_contents)
-    date_long_format = xbmc.getRegion('datelong')
-    time_format = xbmc.getRegion('time')
-    date_long_format = date_long_format + ' ' + time_format
-    logfile_header = 'Video Database Cleaner V' + addonversion \
-        + ' - Running at ' + now.strftime(date_long_format) + '''
+    with xbmcvfs.File(cleaner_log, 'w') as logfile:
+        if old_log_contents:
+            logfile.write(old_log_contents)
+        date_long_format = xbmc.getRegion('datelong')
+        time_format = xbmc.getRegion('time')
+        date_long_format = date_long_format + ' ' + time_format
+        logfile_header = 'Video Database Cleaner V' + addonversion \
+            + ' - Running at ' + now.strftime(date_long_format) + '''
 
 '''
-    logfile.write(logfile_header)
+        logfile.write(logfile_header)
 
-    if deepclean and not replacepath and not specificpath and not no_sources:
-        global global_prepared_list
-        global global_source_list
-        if global_prepared_list is None:
-            temp_params = []
-            temp_like_str = ''
-            temp_atleastonesource = False
-            if deepcleanonlyonedirectory:
-                if deepcleanonlyonedirectory_path == '':
-                    xbmcgui.Dialog().ok(addonname, 'Deep clean is set to clean only one directory, but the directory path is empty. Not doing deep clean.')
-                    global_source_list = []
-                elif not (deepcleanonlyonedirectory_path.endswith('/') or deepcleanonlyonedirectory_path.endswith('\\')):
-                    xbmcgui.Dialog().ok(addonname, 'Deep clean is set to clean only one directory, but the corresponding directory path does not end with a valid path separator. Not doing deep clean.')
-                    global_source_list = []
+        if deepclean and not replacepath and not specificpath and not no_sources:
+            global global_prepared_list
+            global global_source_list
+            if global_prepared_list is None:
+                temp_params = []
+                temp_like_str = ''
+                temp_atleastonesource = False
+                if deepcleanonlyonedirectory:
+                    if deepcleanonlyonedirectory_path == '':
+                        xbmcgui.Dialog().ok(addonname, 'Deep clean is set to clean only one directory, but the directory path is empty. Not doing deep clean.')
+                        global_source_list = []
+                    elif not (deepcleanonlyonedirectory_path.endswith('/') or deepcleanonlyonedirectory_path.endswith('\\')):
+                        xbmcgui.Dialog().ok(addonname, 'Deep clean is set to clean only one directory, but the corresponding directory path does not end with a valid path separator. Not doing deep clean.')
+                        global_source_list = []
 
-            for s in global_source_list:
-                if not (s.endswith('/') or s.endswith('\\')):
-                    dbglog('Ignoring source %s because it doesn\'t end with a valid path separator' % (s))
-                elif not deepcleanonlyonedirectory or s.startswith(deepcleanonlyonedirectory_path):
-                    temp_params.append(s + '_%')
-                    temp_atleastonesource = True
-                else:
-                    dbglog('Ignoring source %s because it doesn\'t match parameters: deepcleanonlyonedirectory: %r, s.startswith(deepcleanonlyonedirectory_path): %r' % (s, deepcleanonlyonedirectory, s.startswith(deepcleanonlyonedirectory_path)))
-            temp_like_str = ' OR strPath LIKE '.join('?'*len(temp_params))
-            temp_like_str += ')'
-            if excluding:
-                temp_params.extend([e + '%' for e in excludes_list])
-                temp_like_str += ' AND (strPath NOT LIKE '
-                temp_like_str += ' AND strPath NOT LIKE '.join(replstr*len(excludes_list))
+                for s in global_source_list:
+                    if not (s.endswith('/') or s.endswith('\\')):
+                        dbglog('Ignoring source %s because it doesn\'t end with a valid path separator' % (s))
+                    elif not deepcleanonlyonedirectory or s.startswith(deepcleanonlyonedirectory_path):
+                        temp_params.append(s + '_%')
+                        temp_atleastonesource = True
+                    else:
+                        dbglog('Ignoring source %s because it doesn\'t match parameters: deepcleanonlyonedirectory: %r, s.startswith(deepcleanonlyonedirectory_path): %r' % (s, deepcleanonlyonedirectory, s.startswith(deepcleanonlyonedirectory_path)))
+                temp_like_str = ' OR strPath LIKE '.join('?'*len(temp_params))
                 temp_like_str += ')'
-            concat_string = "(path.strPath || files.strFilename)" if not is_mysql else "CONCAT(path.strPath, files.strFilename)"
-            temp_sql = "SELECT strPath, idPath as id FROM path WHERE (strPath LIKE " + temp_like_str + " UNION SELECT " + concat_string + " as strPath, idFile as id FROM files INNER JOIN path ON files.idPath = path.idPath WHERE (strPath LIKE " + temp_like_str + " ORDER BY strPath"
-            del concat_string
-            if temp_atleastonesource:
-                temp_sql_count = "SELECT count(*) FROM (%s)" % (temp_sql)
-                wrapped_execute(cursor, temp_sql_count, temp_params*2)
-                temp_sql_count = cursor.fetchall()[0][0]
-                temp_files_to_delete_list = []
-                wrapped_execute(cursor, temp_sql, temp_params*2)
-                temp_res = cursor.fetchone()
-                running_dialog = xbmcgui.DialogProgressBG()
-                running_dialog.create('Please wait. Deep clean is verifying files')
-                temp_i = -1
-                while temp_res is not None:
-                    temp_i += 1
-                    if temp_sql_count < 100 or (temp_i % 100) == 0:
-                        running_dialog.update(min(int(100*temp_i/temp_sql_count),100))
-                    if not xbmcvfs.exists(temp_res[0]):
-                        temp_files_to_delete_list.append(temp_res)
+                if excluding:
+                    temp_params.extend([e + '%' for e in excludes_list])
+                    temp_like_str += ' AND (strPath NOT LIKE '
+                    temp_like_str += ' AND strPath NOT LIKE '.join(replstr*len(excludes_list))
+                    temp_like_str += ')'
+                concat_string = "(path.strPath || files.strFilename)" if not is_mysql else "CONCAT(path.strPath, files.strFilename)"
+                temp_sql = "SELECT strPath, idPath as id FROM path WHERE (strPath LIKE " + temp_like_str + " UNION SELECT " + concat_string + " as strPath, idFile as id FROM files INNER JOIN path ON files.idPath = path.idPath WHERE (strPath LIKE " + temp_like_str + " ORDER BY strPath"
+                del concat_string
+                if temp_atleastonesource:
+                    temp_sql_count = "SELECT count(*) FROM (%s)" % (temp_sql)
+                    wrapped_execute(cursor, temp_sql_count, temp_params*2)
+                    temp_sql_count = cursor.fetchall()[0][0]
+                    temp_files_to_delete_list = []
+                    wrapped_execute(cursor, temp_sql, temp_params*2)
                     temp_res = cursor.fetchone()
-                running_dialog.close()
-                del temp_i
-                del temp_sql_count
+                    running_dialog = xbmcgui.DialogProgressBG()
+                    running_dialog.create('Please wait. Deep clean is verifying files')
+                    temp_i = -1
+                    while temp_res is not None:
+                        temp_i += 1
+                        if temp_sql_count < 100 or (temp_i % 100) == 0:
+                            running_dialog.update(min(int(100*temp_i/temp_sql_count),100))
+                        if not xbmcvfs.exists(temp_res[0]):
+                            temp_files_to_delete_list.append(temp_res)
+                        temp_res = cursor.fetchone()
+                    running_dialog.close()
+                    del temp_i
+                    del temp_sql_count
+                else:
+                    dbglog('The "deep clean" option found no valid sources to check.')
+                if not temp_atleastonesource or len(temp_files_to_delete_list) == 0:
+                    global_prepared_list = []
+                else:
+                    global_prepared_list = temp_files_to_delete_list
+                del temp_params
+                del temp_like_str
+                del temp_atleastonesource
+                del temp_sql
+            if not len(global_prepared_list) == 0:
+                dbglog('Listsize from "deep clean" is %d' % (len(global_prepared_list)))
+                if not cleaning:
+                    logfile.write('The following files and paths would be removed from "deep clean" alone (total %d) (check the remainder of the file for additional paths related to the general cleaning option):\n' % (len(global_prepared_list)))
+                else:
+                    logfile.write('The following files and paths were removed from "deep clean" alone (total %d) (check the remainder of the file for additional paths related to the general cleaning option):\n' % (len(global_prepared_list)))
+                for s, _ in global_prepared_list:
+                    logfile.write('%s\n' % (s))
             else:
-                dbglog('The "deep clean" option found no valid sources to check.')
-            if not temp_atleastonesource or len(temp_files_to_delete_list) == 0:
-                global_prepared_list = []
-            else:
-                global_prepared_list = temp_files_to_delete_list
-            del temp_params
-            del temp_like_str
-            del temp_atleastonesource
-            del temp_sql
-        if not len(global_prepared_list) == 0:
-            dbglog('Listsize from "deep clean" is %d' % (len(global_prepared_list)))
-            if not cleaning:
-                logfile.write('The following files and paths would be removed from "deep clean" alone (total %d) (check the remainder of the file for additional paths related to the general cleaning option):\n' % (len(global_prepared_list)))
-            else:
-                logfile.write('The following files and paths were removed from "deep clean" alone (total %d) (check the remainder of the file for additional paths related to the general cleaning option):\n' % (len(global_prepared_list)))
-            for s, _ in global_prepared_list:
-                logfile.write('%s\n' % (s))
-        else:
-            logfile.write('No files or paths to be removed by the "deep clean" option')
-        logfile.write('\n\n\n')
+                logfile.write('No files or paths to be removed by the "deep clean" option')
+            logfile.write('\n\n\n')
 
-    wrapped_execute(cursor, our_select, my_command_list, window=logfile, suppress_notification=True)
-    counting = 0
-    my_data = cursor.fetchall()
-    listsize = len(my_data)
-    dbglog('Listsize is %d' % listsize)
-    logfile.write('''There are %d paths in the database that meet your criteria
+        wrapped_execute(cursor, our_select, my_command_list, window=logfile, suppress_notification=True)
+        counting = 0
+        my_data = cursor.fetchall()
+        listsize = len(my_data)
+        dbglog('Listsize is %d' % listsize)
+        logfile.write('''There are %d paths in the database that meet your criteria
 
 '''
-                  % listsize)
-    if listsize > 600:
-        do_progress = True
-        dialog = xbmcgui.DialogProgressBG()
-        dbglog('Creating progress dialog for logfile')
-        dialog.create('Getting required data.  Please wait')
-        dialog.update(1)
+                    % listsize)
+        if listsize > 600:
+            do_progress = True
+            dialog = xbmcgui.DialogProgressBG()
+            dbglog('Creating progress dialog for logfile')
+            dialog.create('Getting required data.  Please wait')
+            dialog.update(1)
 
-    if not cleaning and not replacepath:
-        logfile.write('The following file paths would be removed from your database'
-                      )
+        if not cleaning and not replacepath:
+            logfile.write('The following file paths would be removed from your database'
+                        )
+            logfile.write('''
+
+''')
+        elif cleaning and not replacepath:
+            logfile.write('The following paths were removed from the database'
+                        )
+            logfile.write('''
+
+''')
+        elif not cleaning and replacepath:
+            logfile.write('The following paths will be changed in your database'
+                        )
+            logfile.write('''
+
+''')
+        else:
+            logfile.write('The following paths were changed in your database'
+                        )
+            logfile.write('''
+
+''')
+        if not specificpath and not replacepath:
+            for strPath in my_data:
+                counting += 1
+                mystring = u''.join(strPath) + '\n'
+                outdata = mystring
+                if do_progress:
+                    dialog.update(percent=int(counting / float(listsize)
+                                * 100))
+                if cleaning:
+                    dbglog('Removing %s' % strPath)
+                logfile.write(outdata)
+        elif specificpath and not replacepath:
+            dbglog('Removing specific path %s' % specific_path_to_remove)
+            for strPath in my_data:
+                counting += 1
+                mystring = u''.join(strPath) + '\n'
+                outdata = mystring
+                if do_progress:
+                    dialog.update(percent=int(counting / float(listsize)
+                                * 100))
+                if cleaning:
+                    dbglog('Removing unwanted path %s' % strPath)
+                logfile.write(outdata)
+        else:
+            for strPath in my_data:
+                counting += 1
+                mystring = u''.join(strPath) + '\n'
+                outdata = mystring
+                if do_progress:
+                    dialog.update(percent=int(counting / float(listsize)
+                                * 100))
+                if cleaning:
+                    dbglog('Changing path %s' % strPath)
+                logfile.write(outdata)
+            our_data = cursor
+        if counting == 0:  # nothing to remove
+            logfile.write('No paths have been found to remove\n')
+        if do_progress:
+            dialog.close()
         logfile.write('''
 
 ''')
-    elif cleaning and not replacepath:
-        logfile.write('The following paths were removed from the database'
-                      )
-        logfile.write('''
-
-''')
-    elif not cleaning and replacepath:
-        logfile.write('The following paths will be changed in your database'
-                      )
-        logfile.write('''
-
-''')
-    else:
-        logfile.write('The following paths were changed in your database'
-                      )
-        logfile.write('''
-
-''')
-    if not specificpath and not replacepath:
-        for strPath in my_data:
-            counting += 1
-            mystring = u''.join(strPath) + '\n'
-            outdata = mystring
-            if do_progress:
-                dialog.update(percent=int(counting / float(listsize)
-                              * 100))
-            if cleaning:
-                dbglog('Removing %s' % strPath)
-            logfile.write(outdata)
-    elif specificpath and not replacepath:
-        dbglog('Removing specific path %s' % specific_path_to_remove)
-        for strPath in my_data:
-            counting += 1
-            mystring = u''.join(strPath) + '\n'
-            outdata = mystring
-            if do_progress:
-                dialog.update(percent=int(counting / float(listsize)
-                              * 100))
-            if cleaning:
-                dbglog('Removing unwanted path %s' % strPath)
-            logfile.write(outdata)
-    else:
-        for strPath in my_data:
-            counting += 1
-            mystring = u''.join(strPath) + '\n'
-            outdata = mystring
-            if do_progress:
-                dialog.update(percent=int(counting / float(listsize)
-                              * 100))
-            if cleaning:
-                dbglog('Changing path %s' % strPath)
-            logfile.write(outdata)
-        our_data = cursor
-    if counting == 0:  # nothing to remove
-        logfile.write('No paths have been found to remove\n')
-    if do_progress:
-        dialog.close()
-    logfile.write('''
-
-''')
-    if not (runtexturecache and debugtexturecache):
-        # We'll delay the closing of the logfile if running texturecache.py with debug
-        logfile.close()
-    else:
-        global global_logfile
-        global_logfile = logfile
 
 def get_texturecache_duplicates_logfile():
     texturecache_log = \
@@ -1242,7 +1234,7 @@ if i:
         try:
             path_sql = sql
             temp_total_sql_statements = 13
-            temp_ran_sql_statements = -1 
+            temp_ran_sql_statements = -1
             # When cleaning a specific path, the path table must be cleaned last so that we don't lose path-specific information
             # Also, when cleaning a specific path, we don't clean orphaned records not related to the target path
             if specificpath:
@@ -1531,37 +1523,39 @@ if i:
         temp_stdout = sys.stdout
         temp_stderr = sys.stderr
         temp_repl_stdout = StubClass2(sys.stdout)
-        if debugtexturecache:
-            temp_repl_stdout.stdlogfile = global_logfile
-        for tc_num, tc_option in enumerate(tc_option_list):
-            try:
-                running_dialog.update(int(tc_num / len(tc_option_list) * 100), 'Running "texturecache.py %s". Please wait.' % tc_option)
-                resources.texturecache.stopped = StubClass()
-                if tc_option == 'duplicates':
-                    temp_repl_stdout.duplicateslogfile = get_texturecache_duplicates_logfile()
-                    temp_repl_stdout.isduplicates = True
-                else:
-                    temp_repl_stdout.write('Running "texturecachepy %s"\n' % tc_option)
-                sys.stdout = temp_repl_stdout
-                sys.stderr = sys.stdout
-                resources.texturecache.main([tc_option])
-            except BaseException:
-                pass
-            finally:
-                sys.stdout = temp_stdout
-                sys.stderr = temp_stderr
-                if tc_option == 'duplicates':
-                    try:
-                        temp_repl_stdout.duplicateslogfile.close()
-                    except Exception:
-                        pass
-                    temp_repl_stdout.isduplicates = False
-                imp.reload(resources.texturecache)
-        if debugtexturecache:
-            try:
-                global_logfile.close()
-            except Exception:
-                pass
+        cleaner_log = xbmcvfs.translatePath('special://temp/database-cleaner.log')
+        with xbmcvfs.File(cleaner_log) as current_log:
+            cleaner_log_contents = current_log.read()
+        with xbmcvfs.File(cleaner_log, 'w') as logfile:
+            if cleaner_log_contents:
+                logfile.write(cleaner_log_contents)
+            if debugtexturecache:
+                temp_repl_stdout.stdlogfile = logfile
+            for tc_num, tc_option in enumerate(tc_option_list):
+                try:
+                    running_dialog.update(int(tc_num / len(tc_option_list) * 100), 'Running "texturecache.py %s". Please wait.' % tc_option)
+                    resources.texturecache.stopped = StubClass()
+                    if tc_option == 'duplicates':
+                        temp_repl_stdout.duplicateslogfile = get_texturecache_duplicates_logfile()
+                        temp_repl_stdout.isduplicates = True
+                    else:
+                        temp_repl_stdout.write('Running "texturecachepy %s"\n' % tc_option)
+                    sys.stdout = temp_repl_stdout
+                    sys.stderr = sys.stdout
+                    resources.texturecache.main([tc_option])
+                except BaseException:
+                    pass
+                finally:
+                    sys.stdout = temp_stdout
+                    sys.stderr = temp_stderr
+                    if tc_option == 'duplicates':
+                        try:
+                            temp_repl_stdout.duplicateslogfile.close()
+                        except Exception:
+                            pass
+                        temp_repl_stdout.isduplicates = False
+                    imp.reload(resources.texturecache)
+
         running_dialog.close()
         xbmcgui.Dialog().notification(addonname, 'Finished running "texturecache.py',
                  xbmcgui.NOTIFICATION_INFO, 2000)
